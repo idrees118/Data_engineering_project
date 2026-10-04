@@ -39,6 +39,26 @@ jobs:
       - name: Unit + end-to-end tests (includes a real dbt build against ground truth)
         run: pytest -m "not docker" --cov=shopstream --cov-report=term-missing --cov-fail-under=85
 
+  airflow-dag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Airflow with its official constraints
+        run: |
+          pip install "apache-airflow==2.10.5" pytest -e . \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"
+      - name: Parse the DAGs and check their structure
+        env:
+          REQUIRE_AIRFLOW: "1"
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+          AIRFLOW__CORE__UNIT_TEST_MODE: "True"
+        run: pytest tests/unit/test_dag.py -v
+
   docker-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20

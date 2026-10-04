@@ -38,7 +38,8 @@ from shopstream.streaming.kafka_transport import KafkaConsumer, KafkaPublisher
 from tests.integration.s3_support import dbt_build_on_s3, ingest_simulation
 
 REDPANDA_IMAGE = "docker.redpanda.com/redpandadata/redpanda:v24.2.7"
-MINIO_IMAGE = "minio/minio:RELEASE.2024-10-13T13-34-11Z"
+# MinIO publishes its images on quay.io; the Docker Hub repository is gone.
+MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z"
 
 
 def _docker_available() -> bool:
@@ -69,9 +70,9 @@ def broker() -> Iterator[str]:
 
 def _create_topic(broker: str, partitions: int = 3) -> str:
     name = f"shopstream.test.{uuid.uuid4().hex[:8]}"
-    futures = AdminClient({"bootstrap.servers": broker}).create_topics(
-        [NewTopic(name, num_partitions=partitions, replication_factor=1)]
-    )
+    # keep a reference: if the admin client is garbage collected, its pending futures fail
+    admin = AdminClient({"bootstrap.servers": broker})
+    futures = admin.create_topics([NewTopic(name, num_partitions=partitions, replication_factor=1)])
     futures[name].result(timeout=30)
     return name
 
