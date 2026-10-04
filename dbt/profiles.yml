@@ -1,0 +1,7 @@
+shopstream:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('SHOPSTREAM_DATA_DIR', '../data') }}/warehouse/shopstream.duckdb"
+      threads: 4

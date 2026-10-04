@@ -1,0 +1,23 @@
+name: shopstream
+version: "1.0.0"
+config-version: 2
+profile: shopstream
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+vars:
+  # Events whose ingestion time is within this window of the newest loaded batch are re-read,
+  # so a batch that was only partially visible during the previous run is never missed.
+  incremental_lookback_hours: 2
+  late_arrival_threshold_hours: 2
+
+models:
+  shopstream:
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table

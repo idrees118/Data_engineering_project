@@ -1,30 +1,78 @@
-version: '3.9'
+# Local production-like stack: Redpanda (Kafka API) + the pipeline stages as one-shot jobs.
+#
+#   docker compose up -d redpanda redpanda-console topic-init
+#   docker compose run --rm producer       # simulate traffic into the topic
+#   docker compose run --rm ingest         # topic -> bronze Parquet
+#   docker compose run --rm transform      # quality gate + dbt build
+#
+# Redpanda Console (topic browser): http://localhost:8080
+
+x-pipeline: &pipeline
+  build: .
+  environment:
+    SHOPSTREAM_TRANSPORT: kafka
+    SHOPSTREAM_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    SHOPSTREAM_DATA_DIR: /app/data
+  volumes:
+    - lake:/app/data
+  depends_on:
+    topic-init:
+      condition: service_completed_successfully
 
 services:
-  postgres:
-    image: postgres:15
-    container_name: weather_postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
     ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./infra/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
-  etl_app:
-    build:
-      context: ./app
-    container_name: weather_etl_app
-    env_file:
-      - .env
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.7.2
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "8080:8080"
     depends_on:
-      - postgres
-    volumes:
-      - ./app:/app
-    command: [ "bash", "entrypoint.sh" ]
+      redpanda:
+        condition: service_healthy
+
+  topic-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - rpk topic create shopstream.events --partitions 3 --brokers redpanda:9092 || true
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: "no"
+
+  producer:
+    <<: *pipeline
+    command: ["generate", "--days", "14"]
+    profiles: ["jobs"]
+
+  ingest:
+    <<: *pipeline
+    command: ["ingest"]
+    profiles: ["jobs"]
+
+  transform:
+    <<: *pipeline
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mkdir -p /app/data/warehouse && shopstream quality && cd dbt && dbt build --profiles-dir . && shopstream report
+    profiles: ["jobs"]
 
 volumes:
-  postgres_data:
+  lake:

@@ -1,0 +1,79 @@
+version: 2
+
+models:
+  - name: dim_customers
+    description: >
+      Type-2 customer dimension. Half-open validity intervals [valid_from, valid_to);
+      exactly one current row per customer.
+    columns:
+      - name: customer_sk
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests: [not_null]
+      - name: tier
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [standard, plus, vip]
+      - name: valid_from
+        data_tests: [not_null]
+
+  - name: dim_products
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: current_unit_price
+        data_tests: [not_null]
+
+  - name: fct_orders
+    description: One row per order with payment and fulfilment lifecycle folded in.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_sk
+        description: Customer version that was valid when the order was placed.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_sk
+      - name: net_amount
+        data_tests: [not_null]
+      - name: order_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pending_payment, payment_failed, paid, shipped, delivered, cancelled, refunded]
+
+  - name: fct_order_items
+    columns:
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_id
+      - name: category
+        data_tests: [not_null]
+
+  - name: mart_daily_revenue
+    columns:
+      - name: order_date
+        data_tests: [unique, not_null]
+
+  - name: mart_conversion_funnel
+    columns:
+      - name: session_date
+        data_tests: [unique, not_null]
+
+  - name: mart_customer_summary
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [prospect, one_time, repeat, high_value]

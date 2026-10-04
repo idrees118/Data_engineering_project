@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: >
+      Immutable Parquet files written by the ingestion job, partitioned by event_type and
+      ingest_date. Payloads are raw JSON; typing happens in the staging models.
+    meta:
+      external_location: >-
+        read_parquet('{{ var("bronze_path", env_var("SHOPSTREAM_DATA_DIR", "../data") ~ "/lake/bronze") }}/{name}/**/*.parquet',
+        hive_partitioning=true, union_by_name=true)
+    tables:
+      - name: events
+        columns:
+          - name: event_id
+            data_tests: [not_null]
+      - name: dead_letter

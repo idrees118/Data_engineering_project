@@ -1,0 +1,50 @@
+version: 2
+
+models:
+  - name: stg_events
+    description: Deduplicated event log. Exactly one row per event_id.
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: event_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [customer_updated, product_upserted, page_viewed, order_placed,
+                         payment_processed, order_status_changed]
+      - name: ingested_at
+        data_tests: [not_null]
+
+  - name: stg_orders
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests: [not_null]
+
+  - name: stg_order_items
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [order_id, product_id]
+    columns:
+      - name: quantity
+        data_tests: [not_null]
+
+  - name: stg_payments
+    columns:
+      - name: payment_id
+        data_tests: [unique, not_null]
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [succeeded, failed]
+
+  - name: stg_order_status_changes
+    columns:
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [shipped, delivered, cancelled, refunded]

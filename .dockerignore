@@ -1,0 +1,10 @@
+.git
+.github
+data
+archive
+tests
+docs
+**/__pycache__
+.venv
+dbt/target
+dbt/logs

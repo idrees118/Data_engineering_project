@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shopstream"
+version = "1.0.0"
+description = "Event-driven lakehouse platform: streaming ingestion, bronze/silver/gold modelling with dbt, data quality gates and orchestration."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "pyarrow>=15",
+    "duckdb>=1.0",
+]
+
+[project.optional-dependencies]
+kafka = ["confluent-kafka>=2.3"]
+dbt = ["dbt-core>=1.8", "dbt-duckdb>=1.8"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5", "mypy>=1.10"]
+
+[project.scripts]
+shopstream = "shopstream.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["integration: end-to-end tests that run the full pipeline including dbt"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["archive", "dbt"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["confluent_kafka", "pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
