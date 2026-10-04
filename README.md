@@ -119,24 +119,41 @@ backoff. The gate sits before dbt so an unhealthy stream stops the run before it
 ## How it is tested
 
 ```bash
-make test-unit    # ~1s, 57 tests: contracts, simulator, transports, ingestion, quality gates, CLI
-make test         # adds end-to-end tests that run dbt; ~40s; 95% line coverage
+make test-unit    # ~2s, 79 tests: contracts, schema versions, simulator, transports, ingestion,
+                  #   compaction, quality gates, metrics, CLI, Airflow DAG structure
+make test         # + end-to-end tests that run dbt (about 2 minutes); 95% line coverage
+make test-docker  # + real Redpanda broker and real S3 server in containers (needs Docker)
 ```
 
-The end-to-end test is the one I would point a reviewer at. It does not assert "the SQL ran". It
-recomputes revenue in plain Python from the simulator's *clean* events, then checks that the
-warehouse matches it exactly, per day, after:
+The end-to-end tests are the ones I would point a reviewer at. They do not assert "the SQL ran".
+They recompute revenue in plain Python from the simulator's *clean* events, then check that the
+warehouse matches it exactly, per day and per sales channel, after:
 
-* a **full load** with duplicates deliberately let through to silver,
+* a **full load** with duplicates deliberately let through to silver, with schema v1 and v2
+  orders mixed,
 * a **two-step incremental load** split mid-stream, so orders land before their payments and late
   events and duplicates straddle both runs, followed by a third run that must change nothing,
+* a **late payment for an old order**: exactly that one order changes, and the incremental result
+  equals `dbt run --full-refresh`,
+* a **late customer update** that re-slices history: orders before the change keep the old tier,
+  orders after get the new one, again equal to a full refresh,
+* **bronze compaction**: the warehouse is identical afterwards, incrementally and when rebuilt
+  from scratch,
 * an **SCD2 check** that version counts match the real attribute changes.
 
-I also broke the silver de-duplication on purpose to confirm the suite fails (it does, on the dbt
-`unique` test and the ground-truth comparison).
+I also broke the code on purpose to make sure these tests can fail: removing the silver
+de-duplication fails the dbt `unique` test and the ground-truth comparison, and removing the
+"touch the customer's orders" rule fails the re-slicing test. (That second check first showed my
+test was too weak: the tiny dataset sits inside the default lookback window, so everything was
+reprocessed anyway. The tests now use a zero lookback.)
 
-CI runs lint (ruff), strict type checking (mypy), the tests on Python 3.11 and 3.12 with a coverage
-floor, a from-scratch pipeline run, and a Docker build.
+Against real services in containers, CI also checks that the Kafka adapter keeps per-key order,
+redelivers read-but-uncommitted messages after a consumer dies, and never redelivers committed
+ones, and that the whole pipeline reconciles after going through a real Redpanda broker.
+
+CI runs lint (ruff), strict type checking (mypy), the tests on Python 3.11 and 3.12 with a
+coverage floor, the Airflow DAG tests against Airflow 2.10.5, a from-scratch pipeline run, a
+Docker build, and the container-based tests above.
 
 ## Repository layout
 
@@ -159,21 +176,37 @@ docs/                  architecture, data model, ADRs
 
 ## Honest limitations
 
-* **Single machine.** DuckDB is single-writer and the lake is on local disk. [Architecture](docs/architecture.md#what-would-change-at-1000x-the-volume)
-  lists what changes at scale: S3 storage, small-file compaction, incremental fact merges.
+* **Single machine.** DuckDB is single-writer and the ingest checkpoint is per worker, so one
+  ingestion job runs at a time. The lake itself can live on S3, and the fact table is incremental,
+  but dimensions and the small marts are still rebuilt each run. [Architecture](docs/architecture.md#what-would-change-at-1000x-the-volume)
+  lists what changes at scale.
 * **Simulated data.** It is generated, with realistic faults, so the results are checkable against
   ground truth. That is a deliberate trade-off, not a claim about real traffic.
-* **The Kafka adapter is tested against a fake client, not a live broker.** The compose stack is
-  there to run it for real; a Testcontainers-based CI test is the next step. Docker image builds
-  are checked in CI, not locally in every environment.
-* **The Airflow DAG** is covered by a test that runs when Airflow is installed (skipped otherwise).
+* **Kafka was tested with one broker and one consumer.** The real-broker tests cover ordering,
+  redelivery and the full pipeline on Redpanda. Scaling out a consumer group across partitions,
+  and a schema registry, are not tested or built.
+* **S3 was tested against S3-compatible test servers** (an in-process mock and Adobe's S3Mock
+  container), not against AWS S3 or a MinIO deployment. The code only needs an S3 endpoint.
+* **The Airflow DAGs are parsed and structure-checked** in CI against a real Airflow install, but
+  have not been run by a live scheduler.
+* **Metrics are a textfile**, not a served endpoint, and there is no consumer-lag metric yet.
 
 ## Roadmap
 
-- [ ] Testcontainers test: producer -> Redpanda -> ingestion -> bronze
-- [ ] Incremental merge for `fct_orders`
-- [ ] Schema registry and a v2 event schema to exercise contract evolution
-- [ ] Metrics export (rows, rejects, lag) to Prometheus
+Done since the first version:
+
+- [x] Real-broker tests (Redpanda) and real S3-server tests in CI
+- [x] Incremental `fct_orders`, proven equal to a full refresh
+- [x] Event schema v2 with mixed versions in flight
+- [x] Prometheus metrics for ingestion
+- [x] S3-compatible lake location and bronze compaction
+
+Next:
+
+- [ ] Run the DAGs end to end in a real Airflow in CI
+- [ ] Consumer-group scaling test (three consumers on three partitions) and a lag metric
+- [ ] Schema registry with compatibility checks, and a flow for breaking changes
+- [ ] Publish the dbt docs and lineage graph from CI
 
 ## License
 
