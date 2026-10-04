@@ -44,6 +44,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             dedup_window=settings.dedup_window,
             idle_timeout_s=args.follow,
             run_log=settings.data_dir / "lake" / "_meta" / "ingest_runs.jsonl",
+            metrics_path=settings.data_dir / "lake" / "_meta" / "ingest.prom",
         )
     finally:
         consumer.close()

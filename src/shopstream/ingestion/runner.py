@@ -23,6 +23,7 @@ from shopstream.ingestion.bronze import (
     make_batch_id,
 )
 from shopstream.logging_setup import log_kv
+from shopstream.metrics import write_textfile
 from shopstream.streaming.base import EventConsumer
 
 logger = logging.getLogger(__name__)
@@ -66,8 +67,10 @@ def run_ingestion(
     dedup_window: int = 200_000,
     idle_timeout_s: float = 0.0,
     run_log: Path | None = None,
+    metrics_path: Path | None = None,
 ) -> IngestStats:
     """Drain the stream. With `idle_timeout_s` > 0, keep waiting for new data that long."""
+    started = time.monotonic()
     stats = IngestStats()
     dedup = RecentIdFilter(dedup_window)
     idle_since: float | None = None
@@ -121,4 +124,18 @@ def run_ingestion(
             fh.write(
                 json.dumps({"finished_at": datetime.now(UTC).isoformat(), **asdict(stats)}) + "\n"
             )
+    if metrics_path is not None:
+        write_textfile(
+            metrics_path,
+            {
+                "messages_received_total": stats.received,
+                "events_valid_total": stats.valid,
+                "events_rejected_total": stats.rejected,
+                "duplicates_dropped_total": stats.duplicates_dropped,
+                "batches_total": stats.batches,
+                "dead_letter_ratio": stats.dead_letter_ratio,
+                "run_duration_seconds": time.monotonic() - started,
+                "last_run_timestamp_seconds": time.time(),
+            },
+        )
     return stats
