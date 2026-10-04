@@ -28,7 +28,7 @@ test-unit:  ## Fast unit tests
 test:  ## Unit + end-to-end tests (runs dbt; skips tests that need Docker)
 	pytest -m "not docker" --cov=shopstream --cov-report=term-missing
 
-test-docker:  ## Tests against real Redpanda and MinIO containers (needs Docker)
+test-docker:  ## Tests against a real Redpanda broker and S3 server in containers (needs Docker)
 	pytest -m docker -v
 
 generate:  ## Simulate 14 days of traffic into the stream

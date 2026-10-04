@@ -82,7 +82,7 @@ temporarily holds each event twice; silver ignores this and the next run cleans 
 | Producers degraded | `shopstream_ingest_dead_letter_ratio > 0.05` | Same threshold as the quality gate; alert before the gate blocks the run |
 | Unusual volume | `shopstream_ingest_messages_received_total == 0` | The run succeeded but read nothing |
 
-## Moving the lake to S3 / MinIO
+## Moving the lake to S3
 
 Set `SHOPSTREAM_LAKE_URI=s3://<bucket>/<prefix>` and the `SHOPSTREAM_S3_*` variables (see
 `.env.example`), then run dbt with `--target s3`. Local compose example:

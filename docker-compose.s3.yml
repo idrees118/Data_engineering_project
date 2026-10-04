@@ -1,57 +1,47 @@
-# Puts the lake on MinIO (S3-compatible) instead of a local volume.
+# Puts the lake on an S3-compatible server instead of a local volume.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.s3.yml up -d redpanda topic-init minio minio-init
-#   docker compose -f docker-compose.yml -f docker-compose.s3.yml run --rm producer
-#   docker compose -f docker-compose.yml -f docker-compose.s3.yml run --rm ingest
-#   docker compose -f docker-compose.yml -f docker-compose.s3.yml run --rm transform
+#   F="-f docker-compose.yml -f docker-compose.s3.yml"
+#   docker compose $F up -d redpanda topic-init s3
+#   docker compose $F run --rm producer
+#   docker compose $F run --rm ingest
+#   docker compose $F run --rm transform
 #
-# MinIO console: http://localhost:9001  (user/password below, local development only)
+# MinIO no longer publishes community container images, so local development uses Adobe's S3Mock
+# (the same image the integration tests run against in CI). Any S3-compatible endpoint works:
+# point SHOPSTREAM_S3_ENDPOINT_URL / SHOPSTREAM_S3_ENDPOINT at a MinIO build, Ceph, or AWS S3.
 
 x-s3-env: &s3-env
   SHOPSTREAM_LAKE_URI: s3://shopstream-lake/bronze
-  SHOPSTREAM_S3_ENDPOINT_URL: http://minio:9000
-  SHOPSTREAM_S3_ENDPOINT: minio:9000
-  SHOPSTREAM_S3_ACCESS_KEY_ID: minioadmin
-  SHOPSTREAM_S3_SECRET_ACCESS_KEY: minioadmin
+  SHOPSTREAM_S3_ENDPOINT_URL: http://s3:9090
+  SHOPSTREAM_S3_ENDPOINT: s3:9090
+  SHOPSTREAM_S3_ACCESS_KEY_ID: test
+  SHOPSTREAM_S3_SECRET_ACCESS_KEY: test
   SHOPSTREAM_S3_USE_SSL: "false"
   SHOPSTREAM_S3_URL_STYLE: path
 
 services:
-  minio:
-    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
-    command: server /data --console-address ":9001"
+  s3:
+    image: adobe/s3mock:latest
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: shopstream-lake
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9090:9090"
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9090"]
       interval: 5s
       timeout: 5s
       retries: 20
 
-  minio-init:
-    image: quay.io/minio/mc:RELEASE.2024-10-08T09-37-26Z
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/shopstream-lake
-    depends_on:
-      minio:
-        condition: service_healthy
-    restart: "no"
-
   ingest:
     environment: *s3-env
     depends_on:
-      minio-init:
-        condition: service_completed_successfully
+      s3:
+        condition: service_healthy
 
   transform:
     environment: *s3-env
     command:
       - mkdir -p /app/data/warehouse && shopstream quality && cd dbt && dbt build --profiles-dir . --target s3 && shopstream report
     depends_on:
-      minio-init:
-        condition: service_completed_successfully
+      s3:
+        condition: service_healthy

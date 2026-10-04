@@ -32,7 +32,7 @@ simulator ─▶ Kafka/Redpanda ─▶ validate ─▶ bronze Parquet ─▶ qua
 | Incremental loads that survive late data | [`stg_events.sql`](dbt/models/staging/stg_events.sql), [ADR 0004](docs/adr/0004-incremental-on-ingestion-time.md) |
 | Dimensional modelling: SCD2 and point-in-time joins | [`dim_customers.sql`](dbt/models/marts/dim_customers.sql), [`fct_orders.sql`](dbt/models/marts/fct_orders.sql) |
 | Schema evolution with mixed versions in flight | [`events.py`](src/shopstream/events.py), [ADR 0006](docs/adr/0006-schema-evolution.md) |
-| Object storage behind one abstraction (local, S3, MinIO) | [`storage.py`](src/shopstream/storage.py), [ADR 0007](docs/adr/0007-lake-storage-abstraction.md) |
+| Object storage behind one abstraction (local disk or any S3-compatible store) | [`storage.py`](src/shopstream/storage.py), [ADR 0007](docs/adr/0007-lake-storage-abstraction.md) |
 | Small-files compaction that survives crashes | [`ingestion/compaction.py`](src/shopstream/ingestion/compaction.py) |
 | Observability: Prometheus metrics and a runbook | [`metrics.py`](src/shopstream/metrics.py), [`docs/runbook.md`](docs/runbook.md) |
 | Data quality at every layer | [`quality/checks.py`](src/shopstream/quality/checks.py), 46 dbt data tests, [`dbt/tests`](dbt/tests) |
@@ -80,11 +80,11 @@ docker compose run --rm ingest            # topic -> bronze Parquet, manual offs
 docker compose run --rm transform         # quality gate + dbt build + report
 ```
 
-### On object storage (MinIO / S3)
+### On object storage (S3-compatible)
 
 ```bash
 F="-f docker-compose.yml -f docker-compose.s3.yml"
-docker compose $F up -d redpanda topic-init minio minio-init
+docker compose $F up -d redpanda topic-init s3
 docker compose $F run --rm producer && docker compose $F run --rm ingest && docker compose $F run --rm transform
 ```
 
@@ -171,7 +171,6 @@ docs/                  architecture, data model, ADRs
 ## Roadmap
 
 - [ ] Testcontainers test: producer -> Redpanda -> ingestion -> bronze
-- [ ] S3/MinIO as the lake location, plus a compaction job
 - [ ] Incremental merge for `fct_orders`
 - [ ] Schema registry and a v2 event schema to exercise contract evolution
 - [ ] Metrics export (rows, rejects, lag) to Prometheus

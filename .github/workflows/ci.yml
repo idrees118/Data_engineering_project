@@ -69,7 +69,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -e ".[dev,dbt,kafka]"
-      - name: Real Redpanda broker and real MinIO (testcontainers)
+      - name: Real Redpanda broker and real S3 server (testcontainers)
         run: pytest -m docker -v
 
   pipeline-demo:

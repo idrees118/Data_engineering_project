@@ -1,4 +1,4 @@
-"""Helpers shared by the mock-S3 (moto) and real-MinIO test modules."""
+"""Helpers shared by the mock-S3 (moto) and real-S3-server (container) test modules."""
 
 from __future__ import annotations
 
