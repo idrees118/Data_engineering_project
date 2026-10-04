@@ -12,6 +12,8 @@ from pathlib import Path
 
 import duckdb
 
+from shopstream.storage import Lake
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -20,12 +22,8 @@ class CheckResult:
     detail: str
 
 
-def _glob(root: Path, dataset: str) -> str:
-    return str(root / dataset / "**" / "*.parquet")
-
-
 def run_bronze_checks(
-    bronze_dir: Path,
+    bronze_dir: Path | Lake,
     *,
     max_dead_letter_ratio: float,
     max_freshness_hours: float | None,
@@ -33,12 +31,14 @@ def run_bronze_checks(
     now: datetime | None = None,
 ) -> list[CheckResult]:
     now = now or datetime.now(UTC)
+    lake = bronze_dir if isinstance(bronze_dir, Lake) else Lake.local(bronze_dir)
+    if not lake.has_files("events"):
+        return [CheckResult("bronze_not_empty", False, "no bronze event files found")]
     con = duckdb.connect(":memory:")
     results: list[CheckResult] = []
     try:
-        events_glob = _glob(bronze_dir, "events")
-        if not list(bronze_dir.glob("events/**/*.parquet")):
-            return [CheckResult("bronze_not_empty", False, "no bronze event files found")]
+        lake.configure_duckdb(con)
+        events_glob = lake.duckdb_uri("events/**/*.parquet")
 
         total, null_ids, distinct_ids, newest = con.execute(
             f"""select count(*), count(*) filter (where event_id is null),
@@ -74,10 +74,10 @@ def run_bronze_checks(
             )
 
         rejected = 0
-        if list(bronze_dir.glob("dead_letter/**/*.parquet")):
+        if lake.has_files("dead_letter"):
+            dead_letter_glob = lake.duckdb_uri("dead_letter/**/*.parquet")
             rejected = con.execute(
-                f"select count(*) from read_parquet('{_glob(bronze_dir, 'dead_letter')}', "
-                "hive_partitioning=true)"
+                f"select count(*) from read_parquet('{dead_letter_glob}', hive_partitioning=true)"
             ).fetchone()[0]  # type: ignore[index]
         ratio = rejected / (total + rejected) if (total + rejected) else 0.0
         results.append(

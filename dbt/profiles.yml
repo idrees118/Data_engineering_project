@@ -5,3 +5,18 @@ shopstream:
       type: duckdb
       path: "{{ env_var('SHOPSTREAM_DATA_DIR', '../data') }}/warehouse/shopstream.duckdb"
       threads: 4
+
+    # S3 / MinIO lake: `dbt build --target s3`. Endpoint is host:port (no scheme); the credentials
+    # are the same SHOPSTREAM_S3_* variables the Python side uses.
+    s3:
+      type: duckdb
+      path: "{{ env_var('SHOPSTREAM_DATA_DIR', '../data') }}/warehouse/shopstream.duckdb"
+      threads: 4
+      extensions: [httpfs]
+      settings:
+        s3_region: "{{ env_var('SHOPSTREAM_S3_REGION', 'us-east-1') }}"
+        s3_endpoint: "{{ env_var('SHOPSTREAM_S3_ENDPOINT', 's3.amazonaws.com') }}"
+        s3_access_key_id: "{{ env_var('SHOPSTREAM_S3_ACCESS_KEY_ID', '') }}"
+        s3_secret_access_key: "{{ env_var('SHOPSTREAM_S3_SECRET_ACCESS_KEY', '') }}"
+        s3_use_ssl: "{{ env_var('SHOPSTREAM_S3_USE_SSL', 'true') }}"
+        s3_url_style: "{{ env_var('SHOPSTREAM_S3_URL_STYLE', 'vhost') }}"

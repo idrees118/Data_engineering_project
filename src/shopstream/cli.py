@@ -39,7 +39,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     try:
         stats = run_ingestion(
             consumer,
-            BronzeWriter(settings.bronze_dir),
+            BronzeWriter(settings.lake()),
             batch_max_messages=settings.batch_max_messages,
             dedup_window=settings.dedup_window,
             idle_timeout_s=args.follow,
@@ -55,7 +55,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
 def _cmd_quality(_: argparse.Namespace) -> int:
     settings = get_settings()
     results = run_bronze_checks(
-        settings.bronze_dir,
+        settings.lake(),
         max_dead_letter_ratio=settings.max_dead_letter_ratio,
         max_freshness_hours=settings.max_freshness_hours,
     )

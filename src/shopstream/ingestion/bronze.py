@@ -10,7 +10,6 @@ change in how we interpret an event never requires re-ingesting from the stream.
 from __future__ import annotations
 
 import hashlib
-import os
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,9 +17,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from shopstream.events import Envelope
+from shopstream.storage import Lake
 from shopstream.streaming.base import Message
 
 EVENTS_SCHEMA = pa.schema(
@@ -67,12 +66,12 @@ def make_batch_id(messages: Sequence[Message]) -> str:
 
 
 class BronzeWriter:
-    def __init__(self, root: Path) -> None:
-        self.root = root
+    def __init__(self, root: Path | Lake) -> None:
+        self.lake = root if isinstance(root, Lake) else Lake.local(root)
 
     def write_events(
         self, events: Sequence[ValidEvent], batch_id: str, ingested_at: datetime | None = None
-    ) -> list[Path]:
+    ) -> list[str]:
         if not events:
             return []
         now = ingested_at or datetime.now(UTC)
@@ -99,14 +98,9 @@ class BronzeWriter:
                 },
                 schema=EVENTS_SCHEMA,
             )
-            target = (
-                self.root
-                / "events"
-                / f"event_type={event_type}"
-                / f"ingest_date={now:%Y-%m-%d}"
-                / f"batch-{batch_id}.parquet"
-            )
-            written.append(self._write_atomic(table, target))
+            partition = f"event_type={event_type}/ingest_date={now:%Y-%m-%d}"
+            relative = f"events/{partition}/batch-{batch_id}.parquet"
+            written.append(self.lake.write_parquet(table, relative))
         return written
 
     def write_dead_letters(
@@ -114,7 +108,7 @@ class BronzeWriter:
         rejected: Sequence[RejectedMessage],
         batch_id: str,
         ingested_at: datetime | None = None,
-    ) -> Path | None:
+    ) -> str | None:
         if not rejected:
             return None
         now = ingested_at or datetime.now(UTC)
@@ -128,15 +122,5 @@ class BronzeWriter:
             },
             schema=DEAD_LETTER_SCHEMA,
         )
-        target = (
-            self.root / "dead_letter" / f"ingest_date={now:%Y-%m-%d}" / f"batch-{batch_id}.parquet"
-        )
-        return self._write_atomic(table, target)
-
-    @staticmethod
-    def _write_atomic(table: pa.Table, target: Path) -> Path:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(f".{target.name}.tmp")
-        pq.write_table(table, tmp, compression="zstd")
-        os.replace(tmp, target)  # readers never observe a partially written file
-        return target
+        relative = f"dead_letter/ingest_date={now:%Y-%m-%d}/batch-{batch_id}.parquet"
+        return self.lake.write_parquet(table, relative)
