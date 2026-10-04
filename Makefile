@@ -3,7 +3,7 @@ SHELL := /bin/bash
 export SHOPSTREAM_DATA_DIR ?= $(CURDIR)/data
 DBT := cd dbt && dbt
 
-.PHONY: help install lint format typecheck test test-unit generate ingest quality dbt-build report demo dbt-docs clean up down
+.PHONY: help install lint format typecheck test test-unit generate ingest compact quality dbt-build report demo dbt-docs clean up down
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -33,6 +33,9 @@ generate:  ## Simulate 14 days of traffic into the stream
 
 ingest:  ## Stream -> bronze Parquet
 	shopstream ingest
+
+compact:  ## Merge small bronze files (one file per partition)
+	shopstream compact
 
 quality:  ## Bronze quality gates
 	shopstream quality

@@ -50,3 +50,18 @@ with DAG(
     )
 
     ingest >> quality_gate >> dbt_build >> report
+
+
+with DAG(
+    dag_id="shopstream_compaction",
+    description="Daily merge of small bronze files into one file per partition.",
+    schedule="@daily",
+    start_date=datetime(2025, 1, 1),
+    catchup=False,
+    max_active_runs=1,
+    default_args=default_args,
+    tags=["shopstream", "lakehouse", "maintenance"],
+) as compaction_dag:
+    # Safe to run while ingestion is active: partitions touched within the last hour are skipped,
+    # and a crash mid-run heals on the next one (see ingestion/compaction.py).
+    BashOperator(task_id="compact_bronze", bash_command="shopstream compact")

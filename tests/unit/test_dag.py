@@ -24,3 +24,9 @@ def test_quality_gate_runs_between_ingest_and_dbt() -> None:
     assert dag.max_active_runs == 1
     assert dag.get_task("bronze_quality_gate").upstream_task_ids == {"ingest_stream_to_bronze"}
     assert dag.get_task("dbt_build").upstream_task_ids == {"bronze_quality_gate"}
+
+
+def test_compaction_runs_daily_as_its_own_dag() -> None:
+    dag = _load().get_dag("shopstream_compaction")
+    assert dag.max_active_runs == 1
+    assert [t.task_id for t in dag.tasks] == ["compact_bronze"]

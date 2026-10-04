@@ -63,3 +63,29 @@ def test_transport_factory_selects_implementation(tmp_path: Path) -> None:
 def test_settings_validate_their_bounds() -> None:
     with pytest.raises(ValueError, match="max_dead_letter_ratio"):
         Settings(max_dead_letter_ratio=1.5)
+
+
+def test_compact_command_merges_files_and_keeps_every_event(
+    data_dir: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SHOPSTREAM_BATCH_MAX_MESSAGES", "400")  # several batches -> several files
+    get_settings.cache_clear()
+    main(["generate", *SMALL])
+    main(["ingest"])
+    lake = get_settings().lake()
+    rows_before = sum(lake.read_parquet(f).num_rows for f in lake.files("events"))
+    files_before = len(lake.files("events"))
+
+    assert main(["compact", "--min-age", "0"]) == 0
+
+    assert len(lake.files("events")) < files_before
+    assert sum(lake.read_parquet(f).num_rows for f in lake.files("events")) == rows_before
+    assert "partitions_compacted" in capsys.readouterr().out
+
+
+def test_compact_skips_recent_partitions_by_default(data_dir: Path) -> None:
+    main(["generate", *SMALL])
+    main(["ingest"])
+    files = get_settings().lake().files("events")
+    assert main(["compact"]) == 0  # default min age is one hour; everything was just written
+    assert get_settings().lake().files("events") == files

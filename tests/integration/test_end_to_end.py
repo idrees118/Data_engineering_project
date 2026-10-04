@@ -332,3 +332,29 @@ def test_late_customer_update_reslices_history_of_existing_orders(
     incremental = _fct_snapshot(tmp_path)
     _dbt(tmp_path, "run", "--full-refresh", "--select", "fct_orders")
     assert _fct_snapshot(tmp_path) == incremental, "incremental must equal a full refresh"
+
+
+def test_compaction_does_not_change_the_warehouse(
+    tmp_path: Path, simulation: SimulationResult
+) -> None:
+    """Compacted bronze must feed the same silver/gold, both incrementally and from scratch."""
+    from shopstream.ingestion.compaction import compact_bronze
+    from shopstream.storage import Lake
+
+    _load_everything(tmp_path, simulation)
+    _assert_warehouse_matches(tmp_path, simulation)
+
+    lake = Lake.local(tmp_path / "lake" / "bronze")
+    files_before = len(lake.files("events"))
+    stats = compact_bronze(lake, min_age_seconds=0)
+    assert stats.partitions_compacted > 0
+    assert len(lake.files("events")) < files_before
+
+    # incremental run over compacted files: nothing looks new, nothing is double counted
+    _dbt(tmp_path, "build")
+    _assert_warehouse_matches(tmp_path, simulation)
+
+    # a brand-new warehouse built only from the compacted lake gives the same answer
+    (tmp_path / "warehouse" / "shopstream.duckdb").unlink()
+    _dbt(tmp_path, "build")
+    _assert_warehouse_matches(tmp_path, simulation)

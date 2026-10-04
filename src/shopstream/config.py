@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     batch_max_messages: int = Field(default=5_000, gt=0)
     dedup_window: int = Field(default=200_000, gt=0, description="Recent event ids kept in memory.")
 
+    # Bronze compaction: only partitions untouched for this long are merged.
+    compaction_min_age_seconds: float = Field(default=3600.0, ge=0)
+
     # Data-quality gates (see shopstream.quality).
     max_dead_letter_ratio: float = Field(default=0.05, ge=0, le=1)
     max_freshness_hours: float | None = Field(

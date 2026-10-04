@@ -11,6 +11,7 @@ import duckdb
 from shopstream.config import get_settings
 from shopstream.generator import SimulationConfig, simulate
 from shopstream.ingestion import BronzeWriter, run_ingestion
+from shopstream.ingestion.compaction import compact_bronze
 from shopstream.logging_setup import configure_logging
 from shopstream.quality import run_bronze_checks
 from shopstream.streaming import build_consumer, build_publisher
@@ -49,6 +50,14 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     finally:
         consumer.close()
     print(f"ingested {stats}")
+    return 0
+
+
+def _cmd_compact(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    min_age = settings.compaction_min_age_seconds if args.min_age is None else args.min_age
+    stats = compact_bronze(settings.lake(), min_age_seconds=min_age)
+    print(f"compacted {stats}  duplicates_removed={stats.duplicates_removed}")
     return 0
 
 
@@ -127,6 +136,16 @@ def main(argv: list[str] | None = None) -> int:
         help="keep waiting for new data until idle this long (default: drain & exit)",
     )
     ing.set_defaults(func=_cmd_ingest)
+
+    comp = sub.add_parser("compact", help="merge small bronze files into one file per partition")
+    comp.add_argument(
+        "--min-age",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="only touch partitions idle this long (default: from settings, 1h)",
+    )
+    comp.set_defaults(func=_cmd_compact)
 
     sub.add_parser("quality", help="run bronze quality gates").set_defaults(func=_cmd_quality)
     sub.add_parser("report", help="print headline numbers from the gold marts").set_defaults(
