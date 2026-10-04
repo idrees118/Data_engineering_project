@@ -78,3 +78,18 @@ def _is_valid(raw: bytes) -> bool:
     except EventValidationError:
         return False
     return True
+
+
+def test_orders_switch_to_schema_v2_at_the_cutover_day() -> None:
+    cfg = SimulationConfig(**{**SMALL.__dict__, "days": 4, "v2_from_day": 2})
+    by_day: dict[int, set[int]] = {}
+    for order in simulate(cfg).iter_clean(EventType.ORDER_PLACED):
+        day = (order.event_time.date() - cfg.start_date).days
+        by_day.setdefault(day, set()).add(order.schema_version)
+    assert by_day[0] == by_day[1] == {1}
+    assert by_day[2] == by_day[3] == {2}
+
+
+def test_v2_can_be_disabled() -> None:
+    cfg = SimulationConfig(**{**SMALL.__dict__, "v2_from_day": None})
+    assert {o.schema_version for o in simulate(cfg).iter_clean(EventType.ORDER_PLACED)} == {1}

@@ -109,6 +109,15 @@ def _assert_warehouse_matches(data_dir: Path, result: SimulationResult) -> None:
         total = con.sql("select sum(net_revenue) from marts.fct_orders").fetchone()[0]  # type: ignore[index]
         assert Decimal(total) == expected["net_revenue"]
 
+        channels = dict(
+            con.sql("select channel, count(*) from marts.fct_orders group by 1").fetchall()
+        )
+        expected_channels: dict[str, int] = defaultdict(int)
+        for e in result.iter_clean(EventType.ORDER_PLACED):
+            expected_channels[str(e.payload.get("channel", "unknown"))] += 1
+        assert channels == dict(expected_channels), "mixed v1/v2 orders must be counted exactly"
+        assert "unknown" in channels and len(channels) > 1, "test must cover both schema versions"
+
         daily = dict(
             con.sql("select order_date, net_revenue from marts.mart_daily_revenue").fetchall()
         )

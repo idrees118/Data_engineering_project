@@ -40,6 +40,11 @@ models:
                 field: customer_sk
       - name: net_amount
         data_tests: [not_null]
+      - name: channel
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [web, mobile, marketplace, unknown]
       - name: order_status
         data_tests:
           - accepted_values:
@@ -77,3 +82,9 @@ models:
           - accepted_values:
               arguments:
                 values: [prospect, one_time, repeat, high_value]
+
+  - name: mart_channel_performance
+    description: Orders and revenue by sales channel. `unknown` = orders from before schema v2.
+    columns:
+      - name: order_date
+        data_tests: [not_null]

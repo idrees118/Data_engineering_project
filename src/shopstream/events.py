@@ -75,6 +75,13 @@ class OrderPlaced(_Payload):
         return items
 
 
+class OrderPlacedV2(OrderPlaced):
+    """v2 adds two *optional* fields, so every v1 payload is also a valid v2 payload."""
+
+    channel: Literal["web", "mobile", "marketplace"] | None = None
+    coupon_code: str | None = Field(default=None, min_length=1)
+
+
 class PaymentProcessed(_Payload):
     payment_id: str = Field(min_length=1)
     order_id: str = Field(min_length=1)
@@ -97,7 +104,13 @@ PAYLOAD_MODELS: dict[EventType, type[_Payload]] = {
     EventType.ORDER_STATUS_CHANGED: OrderStatusChanged,
 }
 
-SUPPORTED_SCHEMA_VERSIONS = {1}
+# (event_type, schema_version) -> payload model. Adding a version is one line here plus a new
+# model; the envelope never changes. Versions are additive: v2 must accept every v1 payload.
+VERSIONED_PAYLOAD_MODELS: dict[tuple[EventType, int], type[_Payload]] = {
+    **{(event_type, 1): model for event_type, model in PAYLOAD_MODELS.items()},
+    (EventType.ORDER_PLACED, 2): OrderPlacedV2,
+}
+SUPPORTED_SCHEMA_VERSIONS = {version for _, version in VERSIONED_PAYLOAD_MODELS}
 
 
 class Envelope(BaseModel):
@@ -138,7 +151,13 @@ def parse_event(raw: bytes) -> Envelope:
         raise EventValidationError("invalid_json: top-level value is not an object")
     try:
         envelope = Envelope.model_validate(data)
-        PAYLOAD_MODELS[envelope.event_type].model_validate(envelope.payload)
+        model = VERSIONED_PAYLOAD_MODELS.get((envelope.event_type, envelope.schema_version))
+        if model is None:
+            raise EventValidationError(
+                f"schema_violation: schema_version: {envelope.event_type.value} "
+                f"has no version {envelope.schema_version}"
+            )
+        model.model_validate(envelope.payload)
     except ValidationError as exc:
         first = exc.errors()[0]
         location = ".".join(str(p) for p in first["loc"])

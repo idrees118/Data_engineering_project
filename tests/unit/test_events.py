@@ -54,7 +54,7 @@ def test_naive_timestamp_is_rejected() -> None:
 
 def test_unsupported_schema_version_is_rejected() -> None:
     with pytest.raises(EventValidationError, match="schema_version"):
-        parse_event(_raw(schema_version=2))
+        parse_event(_raw(schema_version=3))
 
 
 def test_payload_with_unexpected_field_is_rejected() -> None:
@@ -88,3 +88,37 @@ def test_order_business_rules(mutation) -> None:  # type: ignore[no-untyped-def]
 
 def test_valid_order_is_accepted() -> None:
     parse_event(serialize_event(make_event(EventType.ORDER_PLACED, ORDER)))
+
+
+def _order_event(version: int, **extra: object) -> bytes:
+    return serialize_event(
+        make_event(EventType.ORDER_PLACED, {**ORDER, **extra}, schema_version=version)
+    )
+
+
+def test_v1_order_without_new_fields_still_parses() -> None:
+    parse_event(_order_event(1))
+
+
+def test_v2_order_accepts_the_new_optional_fields() -> None:
+    envelope = parse_event(_order_event(2, channel="mobile", coupon_code="SAVE10"))
+    assert envelope.schema_version == 2
+
+
+def test_v2_order_without_optional_fields_parses() -> None:
+    parse_event(_order_event(2))
+
+
+def test_v1_rejects_fields_that_only_exist_in_v2() -> None:
+    with pytest.raises(EventValidationError, match="channel"):
+        parse_event(_order_event(1, channel="mobile"))
+
+
+def test_v2_rejects_unknown_channel() -> None:
+    with pytest.raises(EventValidationError, match="channel"):
+        parse_event(_order_event(2, channel="carrier_pigeon"))
+
+
+def test_event_types_without_a_v2_reject_version_2() -> None:
+    with pytest.raises(EventValidationError, match="no version 2"):
+        parse_event(_raw(schema_version=2))

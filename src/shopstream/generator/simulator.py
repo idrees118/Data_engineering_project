@@ -51,6 +51,8 @@ class SimulationConfig:
     late_rate: float = 0.02
     malformed_rate: float = 0.005
     max_lateness_hours: float = 36.0
+    # Orders placed from this day on use order_placed schema v2 (None = never). Default: halfway.
+    v2_from_day: int | None = -1
 
 
 @dataclass(frozen=True)
@@ -94,17 +96,32 @@ class _Simulator:
     def _uuid(self) -> str:
         return str(uuid.UUID(int=self.rng.getrandbits(128), version=4))
 
-    def _emit(self, event_type: EventType, at: datetime, payload: dict[str, object]) -> None:
+    def _emit(
+        self,
+        event_type: EventType,
+        at: datetime,
+        payload: dict[str, object],
+        schema_version: int = 1,
+    ) -> None:
         if at >= self.window_end:
             return  # has not happened yet at "now"
         self.events.append(
             Envelope(
                 event_id=self._uuid(),
                 event_type=event_type,
+                schema_version=schema_version,
                 event_time=at.replace(microsecond=0),
                 payload=payload,
             )
         )
+
+    def _uses_v2(self, day: date) -> bool:
+        cutover = self.cfg.v2_from_day
+        if cutover is None:
+            return False
+        if cutover < 0:
+            cutover = self.cfg.days // 2
+        return (day - self.cfg.start_date).days >= cutover
 
     def _random_moment(self, day: date) -> datetime:
         hour = self.rng.choices(range(24), weights=HOUR_WEIGHTS)[0]
@@ -239,17 +256,22 @@ class _Simulator:
 
         self.order_seq += 1
         order_id = f"ord_{self.order_seq:07d}"
-        self._emit(
-            EventType.ORDER_PLACED,
-            placed_at,
-            {
-                "order_id": order_id,
-                "customer_id": customer,
-                "currency": "EUR",
-                "items": items,
-                "discount_amount": discount,
-            },
-        )
+        order_payload: dict[str, object] = {
+            "order_id": order_id,
+            "customer_id": customer,
+            "currency": "EUR",
+            "items": items,
+            "discount_amount": discount,
+        }
+        schema_version = 1
+        if self._uses_v2(day):
+            schema_version = 2
+            order_payload["channel"] = rng.choices(
+                ["web", "mobile", "marketplace"], weights=[55, 35, 10]
+            )[0]
+            if discount > 0:
+                order_payload["coupon_code"] = f"SAVE{rng.choice([5, 10, 15])}"
+        self._emit(EventType.ORDER_PLACED, placed_at, order_payload, schema_version)
 
         amount = round(gross - discount, 2)
         paid_at = self._payment_flow(order_id, amount, placed_at)
