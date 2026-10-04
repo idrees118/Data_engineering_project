@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import pairwise
 from pathlib import Path
@@ -19,7 +20,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from shopstream.events import EventType
+from shopstream.events import Envelope, EventType, serialize_event
 from shopstream.generator import SimulationConfig, SimulationResult, simulate
 from shopstream.ingestion import BronzeWriter, run_ingestion
 from shopstream.streaming.file_transport import FileConsumer, FilePublisher
@@ -190,3 +191,144 @@ def test_scd2_has_one_current_row_per_customer_and_tracks_changes(
         ] == len(attribute_changes)  # type: ignore[index]
     finally:
         con.close()
+
+
+# -- incremental fct_orders: the cases that make an incremental fact hard -------------------------
+
+
+def _load_everything(data_dir: Path, result: SimulationResult) -> None:
+    (data_dir / "warehouse").mkdir()
+    _publish(data_dir, result, 0, len(result.messages))
+    _ingest(data_dir)
+    _dbt(data_dir, "build")
+
+
+# The simulated data is ingested within seconds, which is inside the default 2h lookback, so with
+# the default every order would be re-processed and these tests would prove nothing. A zero
+# lookback means only orders that are genuinely touched by the new events are recomputed.
+NO_LOOKBACK = ("--vars", "{incremental_lookback_hours: 0}")
+
+
+def _publish_crafted(data_dir: Path, events: list[Envelope]) -> None:
+    publisher = FilePublisher(data_dir / "landing")
+    for event in events:
+        publisher.publish("crafted", serialize_event(event))
+    publisher.close()
+
+
+def _fct_snapshot(data_dir: Path) -> list[tuple]:  # type: ignore[type-arg]
+    con = duckdb.connect(str(data_dir / "warehouse" / "shopstream.duckdb"), read_only=True)
+    try:
+        return con.sql("select * from marts.fct_orders order by order_id").fetchall()
+    finally:
+        con.close()
+
+
+def test_late_payment_for_an_old_order_updates_only_that_order(
+    tmp_path: Path, simulation: SimulationResult
+) -> None:
+    _load_everything(tmp_path, simulation)
+    before = {row[0]: row for row in _fct_snapshot(tmp_path)}
+
+    paid = {
+        e.payload["order_id"]
+        for e in simulation.iter_clean(EventType.PAYMENT_PROCESSED)
+        if e.payload["status"] == "succeeded"
+    }
+    unpaid = [
+        e
+        for e in simulation.iter_clean(EventType.ORDER_PLACED)
+        if e.payload["order_id"] not in paid
+    ]
+    order = min(unpaid, key=lambda e: e.event_time)  # the oldest order that never got paid
+    gross = sum(
+        Decimal(str(i["quantity"])) * Decimal(str(i["unit_price"])) for i in order.payload["items"]
+    )  # type: ignore[attr-defined,union-attr]
+    net = gross - Decimal(str(order.payload["discount_amount"]))  # type: ignore[arg-type]
+    late_payment = Envelope(
+        event_id="99999999-0000-4000-8000-000000000001",
+        event_type=EventType.PAYMENT_PROCESSED,
+        event_time=order.event_time + timedelta(hours=1),
+        payload={
+            "payment_id": "pay_late_0001",
+            "order_id": order.payload["order_id"],
+            "amount": float(net),
+            "method": "card",
+            "status": "succeeded",
+        },
+    )
+    _publish_crafted(tmp_path, [late_payment])
+    _ingest(tmp_path)
+    _dbt(tmp_path, "build", *NO_LOOKBACK)
+
+    incremental = _fct_snapshot(tmp_path)
+    after = {row[0]: row for row in incremental}
+    assert len(after) == len(before)
+    changed = [oid for oid in after if after[oid] != before[oid]]
+    assert changed == [order.payload["order_id"]], "exactly the touched order must change"
+
+    con = duckdb.connect(str(tmp_path / "warehouse" / "shopstream.duckdb"), read_only=True)
+    try:
+        paid_at, revenue = con.sql(
+            f"select paid_at, net_revenue from marts.fct_orders "
+            f"where order_id = '{order.payload['order_id']}'"
+        ).fetchone()  # type: ignore[misc]
+    finally:
+        con.close()
+    assert paid_at is not None
+    assert Decimal(revenue) == net
+
+    _dbt(tmp_path, "run", "--full-refresh", "--select", "fct_orders")
+    assert _fct_snapshot(tmp_path) == incremental, "incremental must equal a full refresh"
+
+
+def test_late_customer_update_reslices_history_of_existing_orders(
+    tmp_path: Path, simulation: SimulationResult
+) -> None:
+    _load_everything(tmp_path, simulation)
+
+    versions: dict[str, int] = defaultdict(int)
+    for e in simulation.iter_clean(EventType.CUSTOMER_UPDATED):
+        versions[str(e.payload["customer_id"])] += 1
+    orders_by_customer: dict[str, list[datetime]] = defaultdict(list)
+    for e in simulation.iter_clean(EventType.ORDER_PLACED):
+        orders_by_customer[str(e.payload["customer_id"])].append(e.event_time)
+
+    cut_time = datetime(2025, 1, 4, 12, tzinfo=UTC)
+    customer = next(
+        cid
+        for cid, times in orders_by_customer.items()
+        if versions[cid] == 1
+        and any(t < cut_time for t in times)
+        and any(t >= cut_time for t in times)
+    )
+    original = next(
+        e
+        for e in simulation.iter_clean(EventType.CUSTOMER_UPDATED)
+        if e.payload["customer_id"] == customer
+    )
+    upgrade = Envelope(
+        event_id="99999999-0000-4000-8000-000000000002",
+        event_type=EventType.CUSTOMER_UPDATED,
+        event_time=cut_time,
+        payload={**original.payload, "tier": "vip"},
+    )
+    _publish_crafted(tmp_path, [upgrade])
+    _ingest(tmp_path)
+    _dbt(tmp_path, "build", *NO_LOOKBACK)
+
+    con = duckdb.connect(str(tmp_path / "warehouse" / "shopstream.duckdb"), read_only=True)
+    try:
+        rows = con.sql(
+            f"select placed_at, customer_tier_at_order from marts.fct_orders "
+            f"where customer_id = '{customer}'"
+        ).fetchall()
+    finally:
+        con.close()
+    assert rows
+    for placed_at, tier in rows:
+        assert tier == ("vip" if placed_at >= cut_time else "standard"), placed_at
+
+    incremental = _fct_snapshot(tmp_path)
+    _dbt(tmp_path, "run", "--full-refresh", "--select", "fct_orders")
+    assert _fct_snapshot(tmp_path) == incremental, "incremental must equal a full refresh"

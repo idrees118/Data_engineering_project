@@ -5,6 +5,7 @@ select
     cast(json_extract(payload, '$.amount') as decimal(18, 2)) as amount,
     json_extract_string(payload, '$.method')     as method,
     json_extract_string(payload, '$.status')     as status,
-    event_time                                   as processed_at
+    event_time                                   as processed_at,
+    ingested_at
 from {{ ref('stg_events') }}
 where event_type = 'payment_processed'

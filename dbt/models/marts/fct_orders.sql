@@ -1,12 +1,49 @@
+{{
+    config(
+        materialized='incremental',
+        unique_key='order_id',
+        incremental_strategy='delete+insert',
+    )
+}}
+
 {#-
     One row per order with its full lifecycle folded in.
 
-    Rebuilt as a table (not incremental) on purpose: payments and status changes arrive after
-    the order and may arrive late, so any order can change on any run. At this volume a rebuild
-    is cheaper and safer than tracking which orders need a merge. See docs/adr/0003.
+    Incremental: only orders *touched* since the last run are recomputed. An order is touched when
+    a new order, payment or status event for it was ingested, or when its customer has a new
+    customer_updated event (that re-slices the SCD2 history the order joins to). The cutoff is the
+    newest `last_ingested_at` already in this table minus a lookback; the comparison is strict
+    because the lookback is what provides the overlap, and delete+insert on order_id makes
+    re-processing that overlap idempotent. See docs/adr/0003.
 -#}
 
-with items as (
+-- depends_on: {{ ref('stg_customer_updates') }}
+{% if is_incremental() %}
+{% set cutoff %}(
+    select coalesce(max(last_ingested_at), timestamp '1970-01-01') from {{ this }}
+) - interval '{{ var("incremental_lookback_hours") }} hours'{% endset %}
+{% endif %}
+
+with
+
+{% if is_incremental() %}
+touched as (
+
+    select order_id from {{ ref('stg_orders') }} where ingested_at > {{ cutoff }}
+    union
+    select order_id from {{ ref('stg_payments') }} where ingested_at > {{ cutoff }}
+    union
+    select order_id from {{ ref('stg_order_status_changes') }} where ingested_at > {{ cutoff }}
+    union
+    select o.order_id
+    from {{ ref('stg_orders') }} o
+    join {{ ref('stg_customer_updates') }} c using (customer_id)
+    where c.ingested_at > {{ cutoff }}
+
+),
+{% endif %}
+
+items as (
 
     select
         order_id,
@@ -14,6 +51,7 @@ with items as (
         sum(quantity)                     as units,
         sum(quantity * unit_price)        as gross_amount
     from {{ ref('stg_order_items') }}
+    {% if is_incremental() %}where order_id in (select order_id from touched){% endif %}
     group by 1
 
 ),
@@ -25,8 +63,10 @@ payments as (
         count(*)                                           as payment_attempts,
         count(*) filter (where status = 'failed')          as failed_payment_attempts,
         min(processed_at) filter (where status = 'succeeded') as paid_at,
-        max(method)  filter (where status = 'succeeded')   as payment_method
+        max(method)  filter (where status = 'succeeded')   as payment_method,
+        max(ingested_at)                                   as last_ingested_at
     from {{ ref('stg_payments') }}
+    {% if is_incremental() %}where order_id in (select order_id from touched){% endif %}
     group by 1
 
 ),
@@ -38,8 +78,10 @@ lifecycle as (
         min(changed_at) filter (where status = 'shipped')   as shipped_at,
         min(changed_at) filter (where status = 'delivered') as delivered_at,
         min(changed_at) filter (where status = 'cancelled') as cancelled_at,
-        min(changed_at) filter (where status = 'refunded')  as refunded_at
+        min(changed_at) filter (where status = 'refunded')  as refunded_at,
+        max(ingested_at)                                    as last_ingested_at
     from {{ ref('stg_order_status_changes') }}
+    {% if is_incremental() %}where order_id in (select order_id from touched){% endif %}
     group by 1
 
 ),
@@ -66,12 +108,18 @@ orders as (
         l.delivered_at,
         l.cancelled_at,
         l.refunded_at,
+        greatest(
+            o.ingested_at,
+            coalesce(p.last_ingested_at, o.ingested_at),
+            coalesce(l.last_ingested_at, o.ingested_at)
+        ) as last_ingested_at,
         o.ingested_at - o.placed_at
             > interval '{{ var("late_arrival_threshold_hours") }} hours' as arrived_late
     from {{ ref('stg_orders') }} o
     left join items i using (order_id)
     left join payments p using (order_id)
     left join lifecycle l using (order_id)
+    {% if is_incremental() %}where o.order_id in (select order_id from touched){% endif %}
 
 )
 
@@ -113,7 +161,8 @@ select
         as net_revenue,
     case when o.refunded_at is not null and o.paid_at is not null then o.net_amount else 0 end
         as refunded_amount,
-    o.arrived_late
+    o.arrived_late,
+    o.last_ingested_at
 from orders o
 left join {{ ref('dim_customers') }} c
     on  c.customer_id = o.customer_id
