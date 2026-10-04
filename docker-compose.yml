@@ -64,7 +64,9 @@ services:
 
   ingest:
     <<: *pipeline
-    command: ["ingest"]
+    # A new consumer group spends its first seconds joining and returns nothing, so wait for
+    # data instead of exiting on the first empty poll.
+    command: ["ingest", "--follow", "20"]
     profiles: ["jobs"]
 
   transform:
